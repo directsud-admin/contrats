@@ -204,6 +204,9 @@
     outline-offset:1px;
     border-color:var(--brand-green);
   }
+  input.invalid, select.invalid, textarea.invalid{ border-color:var(--error) !important; background:#fdf1f0 !important; outline:2px solid rgba(179,38,30,.25); }
+  .field.has-error > label{ color:var(--error); }
+  .choice-row.invalid{ outline:2px solid var(--error); outline-offset:3px; border-radius:8px; }
   .help{ font-size:12px; color:var(--ink-soft); margin-top:4px; }
   .computed{
     font-size:12.5px;
@@ -471,6 +474,14 @@
     <div class="section">
       <h2>Période d'essai</h2>
       <div class="section-hint">Suggestion automatique selon la durée du contrat (article L1242-10) — modifiable.</div>
+      <div class="field" style="margin-bottom:16px;">
+        <label for="f_planning">Planning de l'équipe (jours travaillés)</label>
+        <select id="f_planning">
+          <option value="lv">Du lundi au vendredi</option>
+          <option value="ms">Du mardi au samedi</option>
+        </select>
+        <div class="help">La période d'essai est comptée en jours travaillés : les dimanches (et le jour de repos de l'équipe) ne comptent pas.</div>
+      </div>
       <div class="essai-row" style="margin-bottom:16px;">
         <div class="field">
           <label for="f_essai_jours">Nombre de jours <span class="opt">(suggestion automatique)</span></label>
@@ -1112,6 +1123,22 @@ window.PDF_IMAGES = {};
     maybeSuggestEssai();
   }
 
+  // Date du N-ième jour travaillé à partir de la date de début (incluse).
+  // Planning « lv » = lundi→vendredi, « ms » = mardi→samedi. Dimanche jamais compté.
+  // 30 jours = cas du CDD > 6 mois : 1 mois calendaire (inchangé).
+  function essaiEndISO(debut, jours){
+    if (jours >= 30) return addDaysISO(debut, jours - 1);
+    const pl = (document.getElementById('f_planning') || {}).value === 'ms' ? [2,3,4,5,6] : [1,2,3,4,5];
+    const d = parseISODate(debut);
+    if (!d) return '';
+    let n = 0;
+    for (let i = 0; i < 400; i++){
+      if (pl.indexOf(d.getUTCDay()) !== -1){ n++; if (n >= jours) break; }
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return isoFromDate(d);
+  }
+
   function maybeSuggestEssai(){
     const debut = document.getElementById('f_date_debut').value;
     const fin = document.getElementById('f_date_fin').value;
@@ -1120,7 +1147,7 @@ window.PDF_IMAGES = {};
     const jours = suggestEssaiDays(debut, fin);
     document.getElementById('f_essai_jours').value = jours;
     document.getElementById('f_essai_debut').value = debut;
-    document.getElementById('f_essai_fin').value = addDaysISO(debut, jours - 1);
+    document.getElementById('f_essai_fin').value = essaiEndISO(debut, jours);
   }
 
   function recalcEssaiFromJours(){
@@ -1128,7 +1155,7 @@ window.PDF_IMAGES = {};
     const jours = parseInt(document.getElementById('f_essai_jours').value, 10);
     if (!debut || !jours) return;
     document.getElementById('f_essai_debut').value = debut;
-    document.getElementById('f_essai_fin').value = addDaysISO(debut, jours - 1);
+    document.getElementById('f_essai_fin').value = essaiEndISO(debut, jours);
   }
 
   function updateMontantLettres(){
@@ -1251,22 +1278,55 @@ window.PDF_IMAGES = {};
   // Runs the shared pre-flight checks (selection made, required fields,
   // NIR/IBAN checksum confirmations). Returns the collected field map on
   // success, or null if generation should stop (message already shown).
+  function clearInvalid(){
+    document.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
+    document.querySelectorAll('.has-error').forEach(el => el.classList.remove('has-error'));
+  }
+  function markInvalid(el){
+    el.classList.add('invalid');
+    const f = el.closest('.field'); if (f) f.classList.add('has-error');
+  }
+  // Met en rouge tous les champs visibles et vides ; renvoie le nombre de champs en rouge.
+  function highlightMissing(){
+    clearInvalid();
+    let first = null, n = 0;
+    if (!state.etab){ const r = document.getElementById('etabRow'); r.classList.add('invalid'); first = first || r; n++; }
+    if (!state.type){ const r = document.getElementById('typeRow'); r.classList.add('invalid'); first = first || r; n++; }
+    document.querySelectorAll('#formArea [id^="f_"]').forEach(el => {
+      if (el.offsetParent === null) return; // champ masqué
+      if (!String(el.value || '').trim()){ markInvalid(el); n++; if (!first) first = el; }
+    });
+    if (first){
+      try { first.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+      if (first.focus && first.tagName !== 'DIV') { try { first.focus({ preventScroll: true }); } catch(e){} }
+    }
+    return n;
+  }
+  document.addEventListener('input', e => { const t = e.target; if (t && t.classList && t.classList.contains('invalid')){ t.classList.remove('invalid'); const f = t.closest('.field'); if (f) f.classList.remove('has-error'); } });
+  document.addEventListener('change', e => { const t = e.target; if (t && t.classList && t.classList.contains('invalid')){ t.classList.remove('invalid'); const f = t.closest('.field'); if (f) f.classList.remove('has-error'); } });
+  document.addEventListener('click', e => { if (e.target.closest && e.target.closest('.choice-card')){ const r = e.target.closest('.choice-row'); if (r) r.classList.remove('invalid'); } });
+
   function runPreflightChecks(){
     const statusEl = document.getElementById('statusMsg');
     statusEl.className = '';
     statusEl.textContent = '';
+    clearInvalid();
 
     if (!state.etab || !state.type){
+      highlightMissing();
       statusEl.className = 'error';
-      statusEl.textContent = "Choisissez d'abord un établissement et un mode de rémunération.";
+      statusEl.textContent = "Choisissez d'abord un établissement et un mode de rémunération (cadre rouge).";
       return null;
     }
 
     const map = collectFormData();
     const missing = validateFormData(map);
     if (missing.length > 0){
+      const n = highlightMissing();
       statusEl.className = 'error';
-      statusEl.textContent = 'Champs manquants : merci de compléter tous les champs du formulaire.';
+      statusEl.textContent = n > 0
+        ? 'Champs manquants : ' + n + ' case' + (n > 1 ? 's' : '') + ' à compléter (en rouge ci-dessus).'
+        : 'Champs manquants : merci de compléter tous les champs du formulaire.';
       return null;
     }
 
@@ -2193,6 +2253,7 @@ ${bodyXml}
     document.getElementById('f_date_debut').addEventListener('change', updateDureeComputed);
     document.getElementById('f_date_fin').addEventListener('change', updateDureeComputed);
     document.getElementById('btnRecalcEssai').addEventListener('click', recalcEssaiFromJours);
+    document.getElementById('f_planning').addEventListener('change', recalcEssaiFromJours);
     document.getElementById('f_montant').addEventListener('input', updateMontantLettres);
     document.getElementById('f_nationalite').addEventListener('change', toggleNationaliteAutre);
     document.getElementById('f_nationalite_autre').addEventListener('input', toggleTitreSejour);
@@ -2225,10 +2286,10 @@ ${bodyXml}
   function makePad(canvas){
     const ctx = canvas.getContext('2d');
     let drawing = false, dirty = false, last = null;
+    const h = parseInt(canvas.getAttribute('height'), 10) || 100; // lue UNE fois (size() réécrit l'attribut)
     function size(){
       const r = canvas.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
-      const h = parseInt(canvas.getAttribute('height'), 10) || 100;
       canvas.width = Math.max(10, Math.round(r.width * dpr));
       canvas.height = Math.round(h * dpr);
       canvas.style.height = h + 'px';
