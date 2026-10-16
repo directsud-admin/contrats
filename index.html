@@ -289,7 +289,7 @@
 
   <p class="intro">Choisissez l'établissement et le mode de rémunération, complétez les informations du salarié, puis téléchargez le contrat Word prêt à signer.</p>
 
-  <div class="section" style="padding:18px 22px;margin-bottom:22px;">
+  <div class="section" id="pasteBlock" style="padding:18px 22px;margin-bottom:22px;">
     <h2 style="font-size:15px;">Pré-remplir depuis le mail récap JotForm</h2>
     <div class="section-hint">Collez ici le texte du mail reçu à la soumission de la fiche salarié — les champs ci-dessous se remplissent automatiquement.</div>
     <textarea id="emailPasteArea" rows="5" placeholder="Collez le texte du mail ici…"></textarea>
@@ -1934,6 +1934,9 @@ ${bodyXml}
     };
     if (!Object.values(obj).filter(Boolean).length) return false;
     applyFields(obj, '✓ Informations pré-remplies depuis la fiche salarié (lien du mail) — vérifiez avant de générer le contrat.');
+    // Pré-remplissage OK : le bloc de collage manuel n'a plus d'utilité, on le masque
+    const pb = document.getElementById('pasteBlock');
+    if (pb) pb.style.display = 'none';
     return true;
   }
 
