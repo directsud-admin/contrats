@@ -1302,8 +1302,14 @@ window.PDF_IMAGES = {};
     }
     return n;
   }
-  document.addEventListener('input', e => { const t = e.target; if (t && t.classList && t.classList.contains('invalid')){ t.classList.remove('invalid'); const f = t.closest('.field'); if (f) f.classList.remove('has-error'); } });
-  document.addEventListener('change', e => { const t = e.target; if (t && t.classList && t.classList.contains('invalid')){ t.classList.remove('invalid'); const f = t.closest('.field'); if (f) f.classList.remove('has-error'); } });
+  // Dès qu'un champ en rouge reçoit une valeur (saisie ou calcul automatique, ex. période d'essai), on retire le rouge.
+  function revalidateInvalid(){
+    document.querySelectorAll('input.invalid, select.invalid, textarea.invalid').forEach(el => {
+      if (String(el.value || '').trim()){ el.classList.remove('invalid'); const f = el.closest('.field'); if (f) f.classList.remove('has-error'); }
+    });
+  }
+  document.addEventListener('input', revalidateInvalid);
+  document.addEventListener('change', revalidateInvalid);
   document.addEventListener('click', e => { if (e.target.closest && e.target.closest('.choice-card')){ const r = e.target.closest('.choice-row'); if (r) r.classList.remove('invalid'); } });
 
   function runPreflightChecks(){
