@@ -586,6 +586,7 @@
       <button type="button" class="btn-primary" id="signOk" disabled>Valider et télécharger le PDF signé</button>
       <button type="button" class="btn-mini" id="signCancel" style="height:46px; padding:0 16px;">Annuler</button>
     </div>
+    <div class="sign-note" style="font-size:12px;color:#555;margin:6px 0">Une fois signé, le contrat est téléchargé sur votre appareil et une copie est transmise automatiquement à Direct Sud.</div>
     <div id="signMsg"></div>
   </div>
 </div>
@@ -2287,7 +2288,7 @@ ${bodyXml}
   // dessinées, PDF signé (paraphe sur chaque page + « Lu et approuvé »).
   // Rien n'est envoyé nulle part : tout se passe dans le navigateur.
   // =====================================================================
-  const SIGN = { mode: 'local', map: null, padI: null, padS: null };
+  const SIGN = { mode: 'local', map: null, padI: null, padS: null, lastBlob: null, lastName: '' };
 
   function makePad(canvas){
     const ctx = canvas.getContext('2d');
@@ -2397,6 +2398,50 @@ ${bodyXml}
     document.getElementById('signModal').classList.remove('open');
   }
 
+  // ---- Copie du contrat signé envoyée automatiquement au bureau (via un formulaire JotForm gratuit) ----
+  const COPY_FORM = { id: '262883732649067', nom: 'q2_q2_textbox0', prenom: 'q3_q3_textbox1', zone: 'q4_q4_textbox2', file: 'q5_q5_fileupload3' };
+  async function sendSignedCopy(blob, filename, nom, zone){
+    const F = COPY_FORM;
+    const folder = F.id + '_' + Math.random().toString(16).slice(2, 15);
+    const ev = Date.now() + '_' + F.id + '_' + Math.random().toString(36).slice(2, 9).toUpperCase();
+    const url = 'https://upload.jotform.com/upload?action=multipleUpload&field=' + F.file +
+      '&origin=' + encodeURIComponent('https://form.jotform.com') + '&folder=' + folder + '&event_id=' + ev +
+      '&name=' + encodeURIComponent(filename) + '&qqfile=' + encodeURIComponent(filename);
+    const up = await fetch(url, { method: 'POST', body: blob });
+    const j = await up.json();
+    if (!j || !j.success || !j.fileServer) throw new Error('upload');
+    const fd = new FormData();
+    fd.append('formID', F.id);
+    fd.append('uploadServerUrl', 'https://upload.jotform.com/upload');
+    fd.append('submitSource', 'mounted');
+    fd.append(F.nom, nom);
+    fd.append(F.prenom, '');
+    fd.append(F.zone, zone);
+    fd.append('simple_spc', F.id + '-' + F.id);
+    fd.append('event_id', ev);
+    fd.append('temp_upload_folder', folder);
+    fd.append('temp_upload[' + F.file + '][]', filename + '#' + j.fileServer);
+    fd.append('file_server', j.fileServer);
+    await fetch('https://submit.jotform.com/submit/' + F.id, { method: 'POST', body: fd, mode: 'no-cors' });
+  }
+  async function deliverSignedCopy(){
+    const msg = document.getElementById('signMsg');
+    const map = SIGN.map;
+    const nom = (map['[NOM et PRENOM]'] || '').trim();
+    const zone = (document.getElementById('f_zone').value || '').trim();
+    try {
+      await sendSignedCopy(SIGN.lastBlob, SIGN.lastName, nom, zone);
+      msg.className = 'ok';
+      msg.innerHTML = '✓ PDF signé téléchargé (' + SIGN.lastName + ').<br>✓ Une copie a été envoyée automatiquement à Direct Sud (contre-signature de l\'employeur à suivre).';
+    } catch(err){
+      console.error(err);
+      msg.className = 'error';
+      msg.innerHTML = '✓ PDF signé téléchargé (' + SIGN.lastName + ').<br>⚠ La copie n\'a pas pu être envoyée automatiquement. <a href="#" id="retryCopy">Réessayer</a> ou envoyez le PDF à <b>recrutement@directsud.fr</b> en pièce jointe.';
+      const r = document.getElementById('retryCopy');
+      if (r) r.addEventListener('click', e => { e.preventDefault(); msg.className = ''; msg.textContent = 'Nouvel envoi…'; deliverSignedCopy(); });
+    }
+  }
+
   async function validateSign(){
     const msg = document.getElementById('signMsg');
     const btn = document.getElementById('signOk');
@@ -2412,11 +2457,10 @@ ${bodyXml}
       });
       const filename = contractFilename(map, 'pdf').replace(/\.pdf$/, '_SIGNE.pdf');
       fallbackDownload(blob, filename);
+      SIGN.lastBlob = blob; SIGN.lastName = filename;
       msg.className = 'ok';
-      msg.innerHTML = '✓ PDF signé téléchargé (' + filename + '). ' +
-        (SIGN.mode === 'remote'
-          ? 'Envoyez-le maintenant à <b>recrutement@directsud.fr</b> en pièce jointe.'
-          : 'Conservez-le avec le dossier du salarié et ajoutez la signature de l\'employeur.');
+      msg.innerHTML = '✓ PDF signé téléchargé (' + filename + '). Envoi de la copie à Direct Sud…';
+      await deliverSignedCopy();
     } catch(err){
       console.error(err);
       msg.className = 'error'; msg.textContent = 'Erreur lors de la génération du PDF signé. Réessayez.';
