@@ -1631,7 +1631,7 @@ window.PDF_IMAGES = {};
         }
       }
       doc.setPage(sp);
-      const bx = 118;
+      const bx = 72.8; // aligné sur « Mr/ Mme … » (colonne de droite du bloc signataires)
       doc.setFont('times', 'italic'); doc.setFontSize(10.5); doc.setTextColor(0,0,0);
       doc.text('Lu et approuvé, bon pour accord', bx, sy + 3);
       doc.addImage(sig.signature, 'PNG', bx, sy + 5, 60, 23);
@@ -2430,13 +2430,18 @@ ${bodyXml}
     const nom = (map['[NOM et PRENOM]'] || '').trim();
     const zone = (document.getElementById('f_zone').value || '').trim();
     try {
-      await sendSignedCopy(SIGN.lastBlob, SIGN.lastName, nom, zone);
+      let lastErr = null;
+      for (let t = 1; t <= 3; t++){
+        try { await sendSignedCopy(SIGN.lastBlob, SIGN.lastName, nom, zone); lastErr = null; break; }
+        catch(e){ lastErr = e; if (t < 3) await new Promise(r => setTimeout(r, 1500 * t)); }
+      }
+      if (lastErr) throw lastErr;
       msg.className = 'ok';
-      msg.innerHTML = '✓ PDF signé téléchargé (' + SIGN.lastName + ').<br>✓ Une copie a été envoyée automatiquement à Direct Sud (contre-signature de l\'employeur à suivre).';
+      msg.innerHTML = '✓ Une copie a été envoyée automatiquement à Direct Sud (contre-signature de l\'employeur à suivre).';
     } catch(err){
       console.error(err);
       msg.className = 'error';
-      msg.innerHTML = '✓ PDF signé téléchargé (' + SIGN.lastName + ').<br>⚠ La copie n\'a pas pu être envoyée automatiquement. <a href="#" id="retryCopy">Réessayer</a> ou envoyez le PDF à <b>recrutement@directsud.fr</b> en pièce jointe.';
+      msg.innerHTML = '⚠ La copie n\'a pas pu être envoyée automatiquement. <a href="#" id="retryCopy">Réessayer</a> ou envoyez le PDF à <b>recrutement@directsud.fr</b> en pièce jointe.';
       const r = document.getElementById('retryCopy');
       if (r) r.addEventListener('click', e => { e.preventDefault(); msg.className = ''; msg.textContent = 'Nouvel envoi…'; deliverSignedCopy(); });
     }
@@ -2456,11 +2461,14 @@ ${bodyXml}
         initials: SIGN.padI.png(), signature: SIGN.padS.png(), when, hash
       });
       const filename = contractFilename(map, 'pdf').replace(/\.pdf$/, '_SIGNE.pdf');
-      fallbackDownload(blob, filename);
       SIGN.lastBlob = blob; SIGN.lastName = filename;
+      // 1) d'abord l'envoi de la copie à Direct Sud (sur téléphone, le téléchargement peut mettre la page en arrière-plan et interrompre l'envoi)
       msg.className = 'ok';
-      msg.innerHTML = '✓ PDF signé téléchargé (' + filename + '). Envoi de la copie à Direct Sud…';
+      msg.innerHTML = 'Envoi de la copie à Direct Sud… <b>Ne fermez pas cette page.</b>';
       await deliverSignedCopy();
+      // 2) puis téléchargement du PDF signé
+      fallbackDownload(blob, filename);
+      msg.innerHTML += '<br>✓ PDF signé téléchargé (' + filename + ').';
     } catch(err){
       console.error(err);
       msg.className = 'error'; msg.textContent = 'Erreur lors de la génération du PDF signé. Réessayez.';
