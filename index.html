@@ -2606,6 +2606,11 @@ ${bodyXml}
 
   // ---- Copie du contrat signé envoyée automatiquement au bureau (via un formulaire JotForm gratuit) ----
   const COPY_FORM = { id: '262883732649067', nom: 'q2_q2_textbox0', prenom: 'q3_q3_textbox1', zone: 'q4_q4_textbox2', file: 'q5_q5_fileupload3' };
+  function fetchTimeout(url, opts, ms){
+    const ctl = new AbortController();
+    const tm = setTimeout(() => ctl.abort(), ms || 25000);
+    return fetch(url, Object.assign({}, opts, { signal: ctl.signal })).finally(() => clearTimeout(tm));
+  }
   async function sendSignedCopy(blob, filename, nom, zone){
     const F = COPY_FORM;
     const folder = F.id + '_' + Math.random().toString(16).slice(2, 15);
@@ -2613,7 +2618,7 @@ ${bodyXml}
     const url = 'https://upload.jotform.com/upload?action=multipleUpload&field=' + F.file +
       '&origin=' + encodeURIComponent('https://form.jotform.com') + '&folder=' + folder + '&event_id=' + ev +
       '&name=' + encodeURIComponent(filename) + '&qqfile=' + encodeURIComponent(filename);
-    const up = await fetch(url, { method: 'POST', body: blob });
+    const up = await fetchTimeout(url, { method: 'POST', body: blob }, 20000);
     const j = await up.json();
     if (!j || !j.success || !j.fileServer) throw new Error('upload');
     const fd = new FormData();
@@ -2628,7 +2633,7 @@ ${bodyXml}
     fd.append('temp_upload_folder', folder);
     fd.append('temp_upload[' + F.file + '][]', filename + '#' + j.fileServer);
     fd.append('file_server', j.fileServer);
-    await fetch('https://submit.jotform.com/submit/' + F.id, { method: 'POST', body: fd, mode: 'no-cors' });
+    await fetchTimeout('https://submit.jotform.com/submit/' + F.id, { method: 'POST', body: fd, mode: 'no-cors' }, 15000);
   }
   async function deliverSignedCopy(){
     const msg = document.getElementById('signMsg');
@@ -2638,7 +2643,10 @@ ${bodyXml}
     try {
       let lastErr = null;
       for (let t = 1; t <= 3; t++){
-        try { await sendSignedCopy(SIGN.lastBlob, SIGN.lastName, nom, zone); lastErr = null; break; }
+        try {
+          if (t > 1) msg.innerHTML = 'Envoi de la copie à Direct Sud… (tentative ' + t + '/3) <b>Ne fermez pas cette page.</b>';
+          await sendSignedCopy(SIGN.lastBlob, SIGN.lastName, nom, zone); lastErr = null; break;
+        }
         catch(e){ lastErr = e; if (t < 3) await new Promise(r => setTimeout(r, 1500 * t)); }
       }
       if (lastErr) throw lastErr;
@@ -2671,13 +2679,20 @@ ${bodyXml}
       // 1) d'abord l'envoi de la copie à Direct Sud (sur téléphone, le téléchargement peut mettre la page en arrière-plan et interrompre l'envoi)
       msg.className = 'ok';
       msg.innerHTML = 'Envoi de la copie à Direct Sud… <b>Ne fermez pas cette page.</b>';
-      await deliverSignedCopy();
-      // 2) puis téléchargement du PDF signé
-      fallbackDownload(blob, filename);
-      msg.innerHTML += '<br>✓ PDF signé téléchargé (' + filename + ').';
+      try { await deliverSignedCopy(); } catch(e){ console.error(e); }
+      // 2) puis téléchargement du PDF signé (même si l'envoi a échoué), avec un lien visible de secours
+      try { fallbackDownload(blob, filename); } catch(e){ console.error(e); }
+      const pdfUrl = URL.createObjectURL(blob);
+      const box = document.createElement('div');
+      box.style.marginTop = '10px';
+      box.innerHTML = '✓ PDF signé généré : <a href="' + pdfUrl + '" download="' + filename + '" target="_blank" rel="noopener"><b>Télécharger / ouvrir le PDF signé</b></a><br><small>Si rien ne se télécharge, touchez ce lien. Pensez à envoyer le PDF à recrutement@directsud.fr.</small>';
+      msg.appendChild(box);
+      try { msg.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
     } catch(err){
       console.error(err);
-      msg.className = 'error'; msg.textContent = 'Erreur lors de la génération du PDF signé. Réessayez.';
+      msg.className = 'error';
+      msg.textContent = 'Erreur lors de la génération du PDF signé (' + ((err && err.message) || err) + '). Réessayez ; si le problème continue, prévenez Direct Sud en indiquant ce message.';
+      try { msg.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
     } finally {
       btn.disabled = false;
     }
