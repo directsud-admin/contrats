@@ -494,7 +494,7 @@
           <option value="ms">Du mardi au samedi</option>
           <option value="ls">Du lundi au samedi (temps partiel)</option>
         </select>
-        <div class="help">La période d'essai est comptée en jours travaillés : les dimanches (et le jour de repos de l'équipe) ne comptent pas.</div>
+        <div class="help">La période d'essai est comptée en jours travaillés : les dimanches (et le jour de repos de l'équipe) ne comptent pas. À temps partiel, elle est calculée au prorata des heures (heures ÷ 35).</div>
       </div>
       <div class="essai-row" style="margin-bottom:16px;">
         <div class="field">
@@ -1101,8 +1101,9 @@ window.PDF_IMAGES = {};
   // ---------------------------------------------------------------------
   // Rémunération minimale (SMIC brut) — selon la période du contrat
   // ---------------------------------------------------------------------
+  // Pour changer le minimum : modifier les 2 valeurs ci-dessous (à l'heure / au mois).
+  // Au 01/12/2026 : heure 12.51 et mois 1897.39.
   const SMIC_TABLE = [
-    { from: '2026-12-01', heure: 12.51, mois: 1897.39 },
     { from: '1900-01-01', heure: 12.31, mois: 1867.02 }
   ];
   function smicAt(iso){
@@ -1131,13 +1132,7 @@ window.PDF_IMAGES = {};
     const floor = smicFloor(state.type);
     const unit = state.type === 'mois' ? 'brut/mois' : 'brut/heure';
     const v = parseMontantNum(document.getElementById('f_montant').value);
-    const nextRow = SMIC_TABLE[0];
-    const next = state.type === 'mois' ? nextRow.mois : nextRow.heure;
-    const base = SMIC_TABLE[SMIC_TABLE.length-1];
-    const baseV = state.type === 'mois' ? base.mois : base.heure;
     let txt = 'Minimum légal : ' + fmtEuro(floor) + ' ' + unit;
-    if (floor === baseV) txt += ' (' + fmtEuro(next) + ' à partir du 01/12/2026)';
-    else txt += ' (valable pour un contrat se terminant à partir du 01/12/2026)';
     if (v !== null && v + 0.00001 < floor){
       el.style.color = 'var(--error)';
       txt = '✗ Montant inférieur au minimum légal. ' + txt;
@@ -1323,12 +1318,24 @@ window.PDF_IMAGES = {};
     return isoFromDate(d);
   }
 
+  // Temps partiel : période d'essai au prorata des heures (heures hebdo / 35), arrondie, minimum 1 jour.
+  // Contrat de plus de 6 mois (30 jours = 1 mois calendaire) : non proratisé.
+  function essaiJoursProrata(jours){
+    if (jours === null || jours >= 30) return jours;
+    const reg = document.getElementById('f_regime');
+    const hEl = document.getElementById('f_heures');
+    if (!reg || reg.value !== 'partiel' || state.type !== 'heure') return jours;
+    const h = parseFloat(String(hEl.value || '').replace(',', '.'));
+    if (isNaN(h) || h <= 0 || h >= 35) return jours;
+    return Math.max(1, Math.round(jours * h / 35));
+  }
+
   function maybeSuggestEssai(){
     const debut = document.getElementById('f_date_debut').value;
     const fin = document.getElementById('f_date_fin').value;
     if (!debut || !fin) return;
     if (parseISODate(fin) <= parseISODate(debut)) return;
-    const jours = suggestEssaiDays(debut, fin);
+    const jours = essaiJoursProrata(suggestEssaiDays(debut, fin));
     document.getElementById('f_essai_jours').value = jours;
     document.getElementById('f_essai_debut').value = debut;
     document.getElementById('f_essai_fin').value = essaiEndISO(debut, jours);
@@ -2459,6 +2466,8 @@ ${bodyXml}
     document.getElementById('f_date_fin').addEventListener('change', updateMontantFloor);
     document.getElementById('f_regime').addEventListener('change', updateRegimeUI);
     document.getElementById('f_heures').addEventListener('input', updateHeuresMsg);
+    document.getElementById('f_heures').addEventListener('input', maybeSuggestEssai);
+    document.getElementById('f_regime').addEventListener('change', maybeSuggestEssai);
     document.getElementById('f_nationalite').addEventListener('change', toggleNationaliteAutre);
     document.getElementById('f_nationalite_autre').addEventListener('input', toggleTitreSejour);
     document.getElementById('f_zone_select').addEventListener('change', onZoneSelectChange);
