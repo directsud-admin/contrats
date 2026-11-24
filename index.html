@@ -305,6 +305,7 @@
   .pad-bar{ display:flex; justify-content:space-between; font-size:12px; color:var(--ink-soft); margin-top:3px; }
   .pad-bar button{ background:none; border:0; color:var(--brand-clay-dark); cursor:pointer; font-size:12px; text-decoration:underline; }
   #signOk{ margin-top:14px; }
+  #signOk.notready{ background:var(--line); color:var(--ink-soft); }
   #signMsg{ font-size:13px; margin-top:10px; }
   #signMsg.error{ color:var(--error); }
   #signMsg.ok{ color:var(--brand-green-dark); }
@@ -598,7 +599,7 @@
       <div class="pad-bar"><span>Dessinez au doigt ou à la souris</span><button type="button" id="clrSignature">Effacer</button></div>
     </div>
     <div class="actions" style="margin-top:14px;">
-      <button type="button" class="btn-primary" id="signOk" disabled>Valider et télécharger le PDF signé</button>
+      <button type="button" class="btn-primary" id="signOk">Valider et télécharger le PDF signé</button>
       <button type="button" class="btn-mini" id="signCancel" style="height:46px; padding:0 16px;">Annuler</button>
     </div>
     <div class="sign-note" style="font-size:12px;color:#555;margin:6px 0">Une fois signé, le contrat est téléchargé sur votre appareil et une copie est transmise automatiquement à Direct Sud.</div>
@@ -2535,7 +2536,24 @@ ${bodyXml}
       && document.getElementById('chkApprove').checked
       && document.getElementById('chkIdentity').checked
       && SIGN.padI && SIGN.padS && !SIGN.padI.isEmpty() && !SIGN.padS.isEmpty();
-    document.getElementById('signOk').disabled = !ok;
+    const b = document.getElementById('signOk');
+    b.disabled = false;
+    b.classList.toggle('notready', !ok);
+  }
+
+  // Liste de ce qui manque encore pour pouvoir valider (affichée au clic sur le bouton)
+  function signMissing(){
+    const miss = [];
+    if (!document.getElementById('chkRead').checked){
+      miss.push(document.getElementById('chkRead').disabled
+        ? "faire défiler le contrat jusqu'en bas (puis cocher « J'ai lu l'intégralité du contrat »)"
+        : "cocher « J'ai lu l'intégralité du contrat »");
+    }
+    if (!document.getElementById('chkApprove').checked) miss.push('cocher « Lu et approuvé »');
+    if (!document.getElementById('chkIdentity').checked) miss.push('cocher « Je certifie signer moi-même ce contrat »');
+    if (!SIGN.padI || SIGN.padI.isEmpty()) miss.push('dessiner vos initiales (cadre 1)');
+    if (!SIGN.padS || SIGN.padS.isEmpty()) miss.push('dessiner votre signature (cadre 2)');
+    return miss;
   }
 
   function contractParagraphs(map){
@@ -2594,7 +2612,7 @@ ${bodyXml}
 
   function checkScrolled(){
     const prev = document.getElementById('signPreview');
-    if (prev.scrollTop + prev.clientHeight >= prev.scrollHeight - 12){
+    if (prev.scrollTop + prev.clientHeight >= prev.scrollHeight - 60){
       document.getElementById('chkRead').disabled = false;
       document.getElementById('rowRead').classList.remove('off');
     }
@@ -2664,7 +2682,15 @@ ${bodyXml}
   async function validateSign(){
     const msg = document.getElementById('signMsg');
     const btn = document.getElementById('signOk');
-    btn.disabled = true; msg.className = ''; msg.textContent = 'Génération du PDF signé…';
+    if (btn.dataset.busy === '1') return;
+    const miss = signMissing();
+    if (miss.length){
+      msg.className = 'error';
+      msg.innerHTML = 'Pour valider, il reste à :<br>• ' + miss.join('<br>• ');
+      try { msg.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+      return;
+    }
+    btn.dataset.busy = '1'; btn.disabled = true; msg.className = ''; msg.textContent = 'Génération du PDF signé…';
     try {
       const map = SIGN.map;
       const text = contractParagraphs(map).map(p => p.empty ? '' : p.runs.map(r => r.t).join('')).join('\n');
@@ -2694,7 +2720,7 @@ ${bodyXml}
       msg.textContent = 'Erreur lors de la génération du PDF signé (' + ((err && err.message) || err) + '). Réessayez ; si le problème continue, prévenez Direct Sud en indiquant ce message.';
       try { msg.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
     } finally {
-      btn.disabled = false;
+      btn.disabled = false; btn.dataset.busy = '';
     }
   }
 
@@ -2749,6 +2775,8 @@ ${bodyXml}
     document.getElementById('clrSignature').addEventListener('click', () => SIGN.padS.clear());
     ['chkRead','chkApprove','chkIdentity'].forEach(id => document.getElementById(id).addEventListener('change', SIGN_refresh));
     document.getElementById('signPreview').addEventListener('scroll', checkScrolled);
+    ['touchend','touchmove','wheel','keyup'].forEach(ev => document.getElementById('signPreview').addEventListener(ev, checkScrolled, { passive: true }));
+    setInterval(() => { try { if (document.getElementById('signModal').classList.contains('open')){ checkScrolled(); SIGN_refresh(); } } catch(e){} }, 800);
     document.getElementById('signOk').addEventListener('click', validateSign);
     document.getElementById('signCancel').addEventListener('click', () => {
       if (document.body.classList.contains('signonly')){
