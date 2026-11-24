@@ -468,6 +468,19 @@
           <input type="date" id="f_date_fin">
           <div class="computed" id="dureeComputed"></div>
         </div>
+        <div class="field">
+          <label for="f_regime">Durée du travail</label>
+          <select id="f_regime">
+            <option value="plein">Temps plein (35 h)</option>
+            <option value="partiel">Temps partiel</option>
+          </select>
+          <div class="help" id="help_regime">Le temps partiel est possible uniquement pour un contrat « À l'heure ».</div>
+        </div>
+        <div class="field" id="boxHeures" style="display:none">
+          <label for="f_heures">Heures par semaine (du lundi au samedi)</label>
+          <input type="number" id="f_heures" min="1" max="34.5" step="0.5" inputmode="decimal" placeholder="21">
+          <div class="computed" id="heuresMsg"></div>
+        </div>
       </div>
     </div>
 
@@ -479,6 +492,7 @@
         <select id="f_planning">
           <option value="lv">Du lundi au vendredi</option>
           <option value="ms">Du mardi au samedi</option>
+          <option value="ls">Du lundi au samedi (temps partiel)</option>
         </select>
         <div class="help">La période d'essai est comptée en jours travaillés : les dimanches (et le jour de repos de l'équipe) ne comptent pas.</div>
       </div>
@@ -508,6 +522,7 @@
           <label for="f_montant" id="lbl_montant">Montant brut</label>
           <input type="text" id="f_montant" placeholder="12,50" inputmode="decimal">
           <div class="help" id="help_montant">En euros, avec virgule pour les centimes.</div>
+          <div class="computed" id="montantFloor"></div>
         </div>
         <div class="field span2">
           <div class="computed" id="montantLettres" style="margin-top:26px;"></div>
@@ -1082,12 +1097,178 @@ window.PDF_IMAGES = {};
     });
   }
 
+
+  // ---------------------------------------------------------------------
+  // Rémunération minimale (SMIC brut) — selon la période du contrat
+  // ---------------------------------------------------------------------
+  const SMIC_TABLE = [
+    { from: '2026-12-01', heure: 12.51, mois: 1897.39 },
+    { from: '1900-01-01', heure: 12.31, mois: 1867.02 }
+  ];
+  function smicAt(iso){
+    const d = iso || new Date().toISOString().slice(0,10);
+    return SMIC_TABLE.find(r => d >= r.from) || SMIC_TABLE[SMIC_TABLE.length-1];
+  }
+  // Minimum applicable : on retient le plus élevé sur la durée du contrat
+  // (date de fin si elle est connue, sinon date de début).
+  function smicFloor(type){
+    const debut = (document.getElementById('f_date_debut') || {}).value || '';
+    const fin = (document.getElementById('f_date_fin') || {}).value || '';
+    const ref = (fin && fin >= debut) ? fin : debut;
+    const row = smicAt(ref);
+    return type === 'mois' ? row.mois : row.heure;
+  }
+  function parseMontantNum(str){
+    const n = parseFloat(String(str || '').replace(/\s/g,'').replace(',', '.'));
+    return isNaN(n) ? null : n;
+  }
+  function fmtEuro(n){ return n.toFixed(2).replace('.', ',') + ' €'; }
+
+  function updateMontantFloor(){
+    const el = document.getElementById('montantFloor');
+    if (!el) return;
+    if (!state.type){ el.textContent = ''; return; }
+    const floor = smicFloor(state.type);
+    const unit = state.type === 'mois' ? 'brut/mois' : 'brut/heure';
+    const v = parseMontantNum(document.getElementById('f_montant').value);
+    const nextRow = SMIC_TABLE[0];
+    const next = state.type === 'mois' ? nextRow.mois : nextRow.heure;
+    const base = SMIC_TABLE[SMIC_TABLE.length-1];
+    const baseV = state.type === 'mois' ? base.mois : base.heure;
+    let txt = 'Minimum légal : ' + fmtEuro(floor) + ' ' + unit;
+    if (floor === baseV) txt += ' (' + fmtEuro(next) + ' à partir du 01/12/2026)';
+    else txt += ' (valable pour un contrat se terminant à partir du 01/12/2026)';
+    if (v !== null && v + 0.00001 < floor){
+      el.style.color = 'var(--error)';
+      txt = '✗ Montant inférieur au minimum légal. ' + txt;
+    } else el.style.color = '';
+    el.textContent = txt;
+  }
+
+  // ---------------------------------------------------------------------
+  // Temps partiel (contrat « À l'heure » uniquement)
+  // ---------------------------------------------------------------------
+  function heuresNum(){ return parseMontantNum((document.getElementById('f_heures') || {}).value); }
+  function fmtHeures(h){
+    const hh = Math.floor(h + 1e-9);
+    const mm = Math.round((h - hh) * 60);
+    return hh + 'h' + (mm ? String(mm).padStart(2,'0') : '');
+  }
+  function isPartiel(){
+    return state.type === 'heure' && (document.getElementById('f_regime') || {}).value === 'partiel';
+  }
+
+  function updateRegimeUI(){
+    const sel = document.getElementById('f_regime');
+    if (!sel) return;
+    const optPartiel = sel.querySelector('option[value="partiel"]');
+    const help = document.getElementById('help_regime');
+    if (state.type === 'mois'){
+      sel.value = 'plein';
+      optPartiel.disabled = true;
+      help.textContent = "Temps partiel indisponible pour un contrat « Au mois » : choisissez « À l'heure ».";
+    } else {
+      optPartiel.disabled = false;
+      help.textContent = "Le temps partiel est possible uniquement pour un contrat « À l'heure ».";
+    }
+    const partiel = sel.value === 'partiel';
+    document.getElementById('boxHeures').style.display = partiel ? '' : 'none';
+    const pl = document.getElementById('f_planning');
+    if (partiel && pl.value !== 'ls'){ pl.value = 'ls'; recalcEssaiFromJours(); }
+    if (!partiel && pl.value === 'ls'){ pl.value = 'lv'; recalcEssaiFromJours(); }
+    updateHeuresMsg();
+  }
+
+  function updateHeuresMsg(){
+    const el = document.getElementById('heuresMsg');
+    if (!el) return;
+    if (!isPartiel()){ el.textContent = ''; return; }
+    const h = heuresNum();
+    el.style.color = '';
+    if (h === null){ el.textContent = ''; return; }
+    if (h < 1 || h >= 35){
+      el.style.color = 'var(--error)';
+      el.textContent = '✗ Saisissez une durée hebdomadaire entre 1 h et 34 h 30 (à 35 h, choisissez « Temps plein »).';
+    } else if (h < 24){
+      el.style.color = 'var(--error)';
+      el.textContent = 'Attention : en dessous de 24 h par semaine, la loi exige une dérogation (demande écrite et motivée du salarié ou accord de branche). À vérifier avant de continuer.';
+    } else {
+      el.textContent = '≈ ' + fmtHeures(h) + ' par semaine, du lundi au samedi.';
+    }
+  }
+
+  // Vérifie le minimum légal et les heures du temps partiel. Retourne un message d'erreur ou ''.
+  function checkRegimeAndFloor(){
+    if (document.getElementById('f_regime').value === 'partiel' && state.type !== 'heure'){
+      return "Le temps partiel n'est possible que pour un contrat « À l'heure ».";
+    }
+    if (isPartiel()){
+      const h = heuresNum();
+      const box = document.getElementById('f_heures');
+      if (h === null || h < 1 || h >= 35){
+        markInvalid(box);
+        try { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+        return "Temps partiel : saisissez le nombre d'heures par semaine (entre 1 h et 34 h 30).";
+      }
+    }
+    const v = parseMontantNum(document.getElementById('f_montant').value);
+    const floor = smicFloor(state.type);
+    if (v !== null && v + 0.00001 < floor){
+      const m = document.getElementById('f_montant');
+      markInvalid(m);
+      try { m.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+      return 'Rémunération inférieure au minimum légal : ' + fmtEuro(floor) + (state.type === 'mois' ? ' brut/mois' : ' brut/heure')
+        + '. Corrigez le montant pour continuer.';
+    }
+    return '';
+  }
+
+  // Réécriture de l'article 4 pour le temps partiel (mêmes textes dans le Word, le PDF et l'aperçu signé).
+  function partielTexts(){
+    const hh = fmtHeures(heuresNum());
+    return [
+      ['durée hebdomadaire de travail de 35h se répartissant', "Le « Recruteur de donateurs » est engagé à temps partiel et sera soumis (e) à une durée hebdomadaire de travail de " + hh + "."],
+      ['Du lundi au vendredi', "Cette durée est répartie entre les jours de la semaine, du lundi au samedi, selon le planning établi par le Responsable d’Equipe. Toute modification de cette répartition est notifiée par écrit au « Recruteur de donateurs » au moins trois jours ouvrés avant sa prise d’effet."],
+      ['Ou du mardi au samedi', "Des heures complémentaires pourront être demandées dans la limite du dixième de la durée hebdomadaire de travail fixée au présent article ; elles donnent lieu à la majoration prévue par la loi et ne peuvent avoir pour effet de porter la durée du travail au niveau de la durée légale."]
+    ];
+  }
+  function applyPartielToText(t){
+    if (!isPartiel()) return null;
+    for (const [key, txt] of partielTexts()){
+      if (t.indexOf(key) !== -1) return txt;
+    }
+    return null;
+  }
+  function applyPartielToXml(xml){
+    if (!isPartiel()) return xml;
+    for (const [key, txt] of partielTexts()){
+      const idx = xml.indexOf(key);
+      if (idx === -1) continue;
+      const ps = xml.lastIndexOf('<w:p ', idx);
+      const pe = xml.indexOf('</w:p>', idx) + 6;
+      let seg = xml.slice(ps, pe);
+      seg = seg.replace(/<w:t(\s[^>]*)?>[^<]*<\/w:t>/, '<w:t xml:space="preserve">' + escapeXml(txt) + '</w:t>')
+               .replace(/<w:tab\/>/g, '')
+               .replace(/<w:ind [^>]*\/>/g, '')
+               .replace(/<w:i\/>/g, '').replace(/<w:iCs\/>/g, '');
+      xml = xml.slice(0, ps) + seg + xml.slice(pe);
+    }
+    return xml;
+  }
+  function pdfRun(r, map){
+    const rewritten = applyPartielToText(r.t);
+    if (rewritten !== null) return { ...r, t: rewritten, i: false };
+    return { ...r, t: pdfApplyPlaceholders(r.t, map) };
+  }
+
   function onSelectionChange(){
     const formArea = document.getElementById('formArea');
     if (state.etab && state.type){
       formArea.classList.add('visible');
       updateMontantLabel();
     }
+    updateRegimeUI();
+    updateMontantFloor();
   }
 
   function updateMontantLabel(){
@@ -1101,6 +1282,7 @@ window.PDF_IMAGES = {};
       help.textContent = "En euros par mois, avec virgule pour les centimes (ex: 1801,80).";
     }
     updateMontantLettres();
+    updateMontantFloor();
   }
 
   function updateDureeComputed(){
@@ -1129,7 +1311,8 @@ window.PDF_IMAGES = {};
   // 30 jours = cas du CDD > 6 mois : 1 mois calendaire (inchangé).
   function essaiEndISO(debut, jours){
     if (jours >= 30) return addDaysISO(debut, jours - 1);
-    const pl = (document.getElementById('f_planning') || {}).value === 'ms' ? [2,3,4,5,6] : [1,2,3,4,5];
+    const plv = (document.getElementById('f_planning') || {}).value;
+    const pl = plv === 'ms' ? [2,3,4,5,6] : (plv === 'ls' ? [1,2,3,4,5,6] : [1,2,3,4,5]);
     const d = parseISODate(debut);
     if (!d) return '';
     let n = 0;
@@ -1337,6 +1520,13 @@ window.PDF_IMAGES = {};
       return null;
     }
 
+    const regimeErr = checkRegimeAndFloor();
+    if (regimeErr){
+      statusEl.className = 'error';
+      statusEl.textContent = regimeErr;
+      return null;
+    }
+
     const nirCheck = validateNIR(document.getElementById('f_secu').value);
     if (nirCheck.status === 'invalid'){
       const proceed = confirm(
@@ -1382,6 +1572,7 @@ window.PDF_IMAGES = {};
       const escaped = escapeXml(value);
       xml = xml.split(placeholder).join(escaped);
     }
+    xml = applyPartielToXml(xml);
 
     zip.file(docPath, xml);
     return zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
@@ -1390,7 +1581,7 @@ window.PDF_IMAGES = {};
   function contractFilename(map, ext){
     const nomSafe = (map['[NOM et PRENOM]'] || 'contrat').normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9]+/g,'_');
     const etabLabel = state.etab === 'metro' ? 'Metropole' : 'DOMCOM';
-    const typeLabel = state.type === 'heure' ? 'Heure' : 'Mois';
+    const typeLabel = state.type === 'heure' ? (isPartiel() ? 'Heure_TempsPartiel' : 'Heure') : 'Mois';
     return `Contrat_${etabLabel}_${typeLabel}_${nomSafe}.${ext}`;
   }
 
@@ -1600,7 +1791,7 @@ window.PDF_IMAGES = {};
         }
         continue;
       }
-      const runs = (para.runs || []).map(r => ({ ...r, t: pdfApplyPlaceholders(r.t, map) }));
+      const runs = (para.runs || []).map(r => pdfRun(r, map));
       const listIndent = para.type === 'list' ? 6 : 0;
       if (para.type === 'list'){
         doc.setFont('times', 'normal');
@@ -1760,6 +1951,7 @@ window.PDF_IMAGES = {};
             ['Date de début du contrat', map['[DATE DE DEBUT DU CONTRAT]']],
             ['Date de fin du contrat', map['[DATE DE FIN DU CONTRAT]']],
             ['Durée', map['[NOMBRE]'] + (state.type === 'heure' ? ' semaine(s)' : ' mois')],
+            ['Durée du travail', isPartiel() ? ('Temps partiel — ' + fmtHeures(heuresNum()) + ' par semaine (lundi au samedi)') : 'Temps plein (35h)'],
             ['Jours de période d\'essai', map["[NOMBRE DE JOURS DE PERIODE D'ESSAI]"]],
             ['Date de début de la période d\'essai', map["[DATE DE DEBUT DE LA PERIODE D'ESSAI]"]],
             ['Date de fin de la période d\'essai', map["[DATE DE FIN DE LA PERIODE D'ESSAI]"]]
@@ -2262,6 +2454,11 @@ ${bodyXml}
     document.getElementById('btnRecalcEssai').addEventListener('click', recalcEssaiFromJours);
     document.getElementById('f_planning').addEventListener('change', recalcEssaiFromJours);
     document.getElementById('f_montant').addEventListener('input', updateMontantLettres);
+    document.getElementById('f_montant').addEventListener('input', updateMontantFloor);
+    document.getElementById('f_date_debut').addEventListener('change', updateMontantFloor);
+    document.getElementById('f_date_fin').addEventListener('change', updateMontantFloor);
+    document.getElementById('f_regime').addEventListener('change', updateRegimeUI);
+    document.getElementById('f_heures').addEventListener('input', updateHeuresMsg);
     document.getElementById('f_nationalite').addEventListener('change', toggleNationaliteAutre);
     document.getElementById('f_nationalite_autre').addEventListener('input', toggleTitreSejour);
     document.getElementById('f_zone_select').addEventListener('change', onZoneSelectChange);
@@ -2337,7 +2534,7 @@ ${bodyXml}
     const structure = window.PDF_STRUCTURES[key] || [];
     return structure.map(para => {
       if (para.type === 'empty') return { empty: true };
-      const runs = (para.runs || []).map(r => ({ ...r, t: pdfApplyPlaceholders(r.t, map) }));
+      const runs = (para.runs || []).map(r => pdfRun(r, map));
       return { runs, align: para.align || 'left', list: para.type === 'list' };
     });
   }
